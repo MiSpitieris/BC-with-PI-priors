@@ -1,5 +1,3 @@
-[![License](https://img.shields.io/github/license/MiSpitieris/BC-with-PI-priors)](https://github.com/MiSpitieris/BC-with-PI-priors/blob/main/LICENSE)
-
 # Bayesian Calibration of Imperfect Computer Models using Physics-Informed Priors
 
 This repository is the official implementation of the paper "Bayesian Calibration of Imperfect Computer Models using Physics-Informed Priors". 
