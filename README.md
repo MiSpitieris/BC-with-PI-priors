@@ -3,8 +3,8 @@
 This repository is the official implementation of the paper "Bayesian Calibration of Imperfect Computer Models using Physics-Informed Priors". 
 
 <p align="center">
- <img src="figures/anim_noBias.gif" alt="drawing" width="250"/> 
- <img src="figures/anim_UBias.gif" alt="drawing" width="250"/> 
+ <img src="figures/anim_noBias.gif" alt="drawing" width="400"/> 
+ <img src="figures/anim_UBias.gif" alt="drawing" width="400"/> 
 </p>
 
 <p align="center">
