@@ -44,7 +44,7 @@ The **STAN** folder contains the stan code for the models in Sections 3, 4 and 5
 
 More specifically:
 
-- The **Windkessel** folder contains the stan code for the models in Section 3 and 5.
+- The **Windkessel** folder contains the stan code for the models in Sections 3 and 5.
 - The **Heat_equation** folder contains the stan code for the models in Section 4.
 
 ## Data folder
@@ -57,10 +57,10 @@ The **Data** folder contains blood flow data used to simulate blood pressures in
 The **figures** folder contains all paper figures. These figures can be reproduced in the notebooks.
 
 ## functions folder
-The **WK2and3_sim_fn.R** file contains the WK2 and WK3 numerical simulator sused to simulate data for the experiments in Section 4. The **WK_exp_fn.R** file ccontains functions to extract the posterior distributions from the stan models.
+The **WK2and3_sim_fn.R** file contains the WK2 and WK3 numerical simulator used to simulate data for the experiments in Section 4. The **WK_exp_fn.R** file contains functions to extract the posterior distributions from the stan models.
 
-## Intsructions for building new models using the existing stan code
+## Instructions for building new models using the existing stan code
 The existing stan codes can be used for building physics-informed GP models by doing the following:
 
-- replace the mean and covariance function with your model's corresponing functions
+- replace the mean and covariance function with your model's corresponding functions
 - define priors for the physical and noise parameters
