@@ -1,0 +1,394 @@
+---
+title: "S7.3) Big data approximations with discrepancy"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  html_notebook: default
+---
+
+This notebook contains the code of the paper "Bayesian Calibration of Imperfect Computer Models using Physics-Informed Priors". The models are fitted in rstan and the code is available in the folder "STAN/Approximations". 
+
+#### Load packages
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(
+  message=FALSE,
+  warning = FALSE,
+  comment = '', 
+  fig.width = 6, 
+  fig.height = 4,
+  fig.align = 'center'
+)
+```
+
+```{r}
+# uncomment to install
+# install.packages("rstan")
+# install.packages("ggplot2")
+# install.packages("tidyverse")
+library(rstan)
+library(ggplot2)
+library(tidyverse)
+
+rstan_options(auto_write = TRUE)
+options(mc.cores = 3) # allocate 3 cores (for each model we run 3 chains in parallel)
+# Numerical simulator of the WK3 model
+source("functions/WK2and3_sim_fn.R")
+# Load flow data 
+d = readRDS("Data/Inflow_time.rds")
+```
+
+#### Reality and modelling choice 
+
+\begin{align}
+  \mathcal{R}: \quad & \frac{d P(t)}{d t} + \frac{P(t)}{R_2C} = \frac{Q(t)}{C} \left (1 + \frac{ R_1}{R_2} \right ) + R_1 \frac{d Q(t)}{dt} \quad \text{ (the misspesified model we use to fit the data) }\text{ [WK3] }\\
+  \eta: \quad  &  Q(t) = \frac{1}{R}P(t) + C \frac{dP(t)}{dt} \quad  \text{ (the model we use to simulate data) } \text{ [WK2] }
+\end{align}
+
+
+
+```{r eval=TRUE}
+Rtrue = 1; Ctrue = 1.1; Ztrue = 0.05 
+flow = d$inflow*0.95
+time = d$time
+nP = 90 # number of pressure data
+nI = 100# number of inflow data
+nc = 1  # number of cardiac cycles
+nflow = length(flow)
+# 1. simulate WK3 data (R=R_2, Z=R_1)
+Psim = WK3_simulate(flow = flow, time = time, R = Rtrue, C = Ctrue, Z=Ztrue) # simulate WK3 data for a given flow Q(t)
+P_true = Psim
+# 2. choose pressure and inflow indices
+indP = round(seq(1, nflow, length.out = nP)); indI = round(seq(1, nflow, length.out = nI))
+yP_real = Psim[indP]; yI_real = flow[indI] # noise free fimulated pressure and flow
+# 3. Add noise
+# set.seed(0)
+set.seed(1)
+Pnoise = rnorm(nP*nc, 0, 4) # sample pressure noise from N(0, 4^2)
+Inoise = rnorm(nI*nc, 0, 10) # sample flow noise from N(0,10^2)
+yP_real = rep(yP_real,nc) 
+yI_real = rep(yI_real,nc)
+# 4. store individual data in the population matrices
+yP = yP_real + Pnoise # add noise
+yI = yI_real + Inoise # add noise
+tP = time[indP] # corresponding time (synchronized for the two cycles)
+tI = time[indI] # corresponding time (synchronized for the two cycles)
+
+data_PI = list(nP=nc*nP, nI=nc*nI, tP=rep(tP,nc), tI=rep(tI,nc), yP=yP, yI=yI, mP=12, mI=10)
+```
+
+
+```{r}
+WK2_VFE = stan_model('STAN/Approximations/VFE/WK2_delta_VFE.stan')
+kp = kmeans(data.frame(x=data_PI$tP), centers = data_PI$mP)
+ki = kmeans(data.frame(x=data_PI$tI), centers = data_PI$mI)
+
+init = list("zP" = as.vector(kp$centers), "zI" = as.vector(ki$centers))
+op_VFE=optimizing(WK2_VFE, data=data_PI, hessian=FALSE, init = init, verbose=TRUE, seed=0)
+op_VFE
+```
+
+```{r}
+zP_opt_VFE=op_VFE$par[grep("zP",names(op_VFE$par))]
+zI_opt_VFE=op_VFE$par[grep("zI",names(op_VFE$par))]
+# plot(sort(zP_opt_VFE))
+# plot(sort(zI_opt_VFE))
+data_PI_Z_VFE= data_PI
+data_PI_Z_VFE$zP = zP_opt_VFE
+data_PI_Z_VFE$zI = zI_opt_VFE
+
+fit_post_VFE=stan(file='STAN/Approximations/VFE/WK2_delta_VFE_fixed_Z.stan',
+                  data=data_PI_Z_VFE,
+                  chains=3,
+                  iter=1000,
+                  seed=0
+)
+# stan_hist(fit_post_VFE)
+stan_trace(fit_post_VFE)
+```
+
+### FITC 
+
+```{r}
+WK2_FITC = stan_model('STAN/Approximations/FITC/WK2_delta_FITC.stan')
+op_FITC=optimizing(WK2_FITC, data=data_PI, hessian=FALSE, verbose=TRUE,init=init,seed=31)
+op_FITC
+```
+
+```{r}
+zP_opt=op_FITC$par[grep("zP",names(op_FITC$par))]
+zI_opt=op_FITC$par[grep("zI",names(op_FITC$par))]
+data_PI_Z_FITC = data_PI
+data_PI_Z_FITC$zP = zP_opt
+data_PI_Z_FITC$zI = zI_opt
+# plot(sort(zP_opt))
+# plot(sort(zI_opt))
+```
+
+
+```{r}
+fit_post_FITC=stan(file='STAN/Approximations/FITC/WK2_delta_FITC_fixed_Z.stan',
+                  data=data_PI_Z_FITC,
+                  chains=3,
+                  iter=1000,
+                  seed=0
+)
+
+# stan_hist(fit_post_FITC)
+stan_trace(fit_post_FITC)
+```
+
+
+
+
+
+
+
+
+
+```{r}
+post_VFE = data.frame(rstan::extract(fit_post_VFE))
+post_FITC = data.frame(rstan::extract(fit_post_FITC))
+
+pr = c("R", "C", "sigmaP", "sigmaI")
+pVFE = as.vector(as.matrix(post_VFE[,pr]))
+pFITC = as.vector(as.matrix(post_FITC[,pr]))
+Ns = nrow(post_VFE)
+
+df_plot_post = data.frame(post = c(pVFE, pFITC), par = rep(rep(pr, each = Ns),2), model = c(rep("VFE",length(pr)*Ns), rep("FITC",length(pr)*Ns)))
+```
+
+```{r,fig.width=10, fig.height=5}
+mod_dat = df_plot_post%>%
+  mutate(par = recode(par,
+    "R" = "R",
+    "C" = "C",
+    "sigmaP" = "sigma[P]",
+    "sigmaI" = "sigma[Q]"
+  ))
+df_true_par = data.frame(post=c(Rtrue+Ztrue, Ctrue, 4, 10),par = c("R", "C", "sigma[P]", "sigma[Q]"))
+set_lim = data.frame(x=c(0.5,3.1),y=c(600, 600))
+df_point_est = data.frame(val=c(op_VFE$par[pr],op_FITC$par[pr]),par = rep(df_true_par$par,2), model = rep(rep(c("VFE","FITC"),each=4),2))
+pl_post = ggplot()+
+  geom_histogram(data = mod_dat, aes(x=post, fill = par), color="black",bins = 60)+
+  facet_grid(model~par, scales = "free", labeller = labeller(par = label_parsed))+
+  geom_point(data = set_lim, aes(x=x,y=y), color = "white",alpha=0.000001, size=0.000001)+ # set limits on R and C
+  geom_vline(aes(xintercept = post, linetype = "true"), data=df_true_par, size=0.8)+
+  geom_vline(aes(xintercept = val, linetype = "map"), data=df_point_est, size=0.8)+
+  theme_bw()+ 
+  theme(#legend.position = "none",
+        legend.title = element_blank(),
+        legend.position="bottom",
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        strip.text.x = element_text(size = 13),
+        strip.text.y = element_text(size = 13))+ 
+  xlab("") + ylab("")+
+  scale_fill_manual(
+  breaks=c("R", "C", "sigma[P]", "sigma[Q]"),
+  values=c("#F8766D","#00BE67","white", "white"),guide = "none")
+(pl_post=pl_post + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()))
+ggsave("figures/Appr_delta_post.pdf", plot = pl_post, width = 20, height = 12, units = "cm")
+```
+
+```{r}
+nP_pred = 40
+ind_P_pred = round(seq(1,length(time),length.out = nP_pred))
+tP_pred = time[ind_P_pred]
+data_PI_Z_FITC$nP_pred = nP_pred
+data_PI_Z_FITC$tP_pred = tP_pred
+data_PI_Z_FITC$nI_pred = nP_pred
+data_PI_Z_FITC$tI_pred = tP_pred
+
+N_samples = nrow(post_FITC)
+data_post_FITC = list(alpha=post_FITC$alpha, rho=post_FITC$rho, alpha_d=post_FITC$alpha_d
+                   , rho_d=post_FITC$rho_d, sigmaP=post_FITC$sigmaP, sigmaI=post_FITC$sigmaI
+                   , R=post_FITC$R, C=post_FITC$C, N_samples=N_samples
+  )
+
+data_pred_FITC = c(data_PI_Z_FITC, data_post_FITC)
+```
+
+```{r}
+pred_FITC = stan(file = 'STAN/Approximations/FITC/FITC_delta_predictions.stan',
+                 data = data_pred_FITC,
+                 chains = 1, iter = 1, seed=123,
+                 algorithm = "Fixed_param")
+```
+
+```{r}
+post_mu_CIs.fn = function(post_pred, ci = c(0.05,0.95), time = tP_pred){
+  pp = rstan::extract(post_pred)
+  dfP = pp$y_P[1,,]
+  Psmr = data.frame(mean = colMeans(dfP), 
+                    lower = apply(dfP, 2, quantile, probs = ci[1]), 
+                    upper = apply(dfP, 2, quantile, probs = ci[2]),
+                    time=time)
+  dfI = pp$y_I[1,,]
+  Ismr = data.frame(mean = colMeans(dfI), 
+                    lower = apply(dfI, 2, quantile, probs = ci[1]), 
+                    upper = apply(dfI, 2, quantile, probs = ci[2]),
+                    time=time)
+  return(list(Psmr=Psmr, Ismr=Ismr))
+}
+```
+
+```{r}
+data_post_VFE = list(alpha=post_VFE$alpha, rho=post_VFE$rho, alpha_d=post_VFE$alpha_d
+                      , rho_d=post_VFE$rho_d, sigmaP=post_VFE$sigmaP, sigmaI=post_VFE$sigmaI
+                      , R=post_VFE$R, C=post_VFE$C, N_samples=N_samples
+)
+
+
+data_pred_VFE = c(data_PI_Z_VFE, data_post_VFE)
+data_pred_VFE$nP_pred = nP_pred
+data_pred_VFE$tP_pred = tP_pred
+data_pred_VFE$nI_pred = nP_pred
+data_pred_VFE$tI_pred = tP_pred
+
+```
+
+```{r}
+pred_VFE = stan(file = 'STAN/Approximations/VFE/WK2_delta_VFE_predictions.stan',
+                 data = data_pred_VFE,
+                 chains = 1, iter = 1, seed=123,
+                 algorithm = "Fixed_param")
+```
+
+```{r}
+pp_VFE = rbind(post_mu_CIs.fn(post_pred=pred_VFE)$Psmr, post_mu_CIs.fn(post_pred=pred_VFE)$Ismr)
+pp_VFE$output = c(rep("pressure (mmHg)", nP_pred),rep("inflow (ml/min)", nP_pred))
+pp_VFE$model = "VFE"
+pp_FITC = rbind(post_mu_CIs.fn(post_pred=pred_FITC)$Psmr,post_mu_CIs.fn(post_pred=pred_FITC)$Ismr)
+pp_FITC$output = c(rep("pressure (mmHg)", nP_pred),rep("inflow (ml/min)", nP_pred))
+pp_FITC$model = "FITC"
+pred_df = rbind(pp_VFE, pp_FITC)
+# head(pred_df)
+```
+
+
+
+```{r,fig.width=8}
+df_zP_VFE = data.frame(z=data_PI_Z_VFE$zP, y = rep(60, data_PI_Z_VFE$mP), model = "VFE", output = "pressure (mmHg)")
+df_zI_VFE = data.frame(z=data_PI_Z_VFE$zI, y = rep(-100, data_PI_Z_VFE$mI), model = "VFE", output = "inflow (ml/min)")
+df_zP_FITC = data.frame(z=data_PI_Z_FITC$zP, y = rep(60, data_PI_Z_FITC$mP), model = "FITC", output = "pressure (mmHg)")
+df_zI_FITC = data.frame(z=data_PI_Z_FITC$zI, y = rep(-100, data_PI_Z_FITC$mI), model = "FITC", output = "inflow (ml/min)")
+df_z = rbind(df_zP_VFE, df_zI_VFE, df_zP_FITC, df_zI_FITC)
+P_true = data.frame(val=Psim, time=time)
+P_true$output = "pressure (mmHg)"
+I_true = data.frame(val=flow, time=time)
+I_true$output = "inflow (ml/min)"
+true_out = rbind(P_true, I_true)
+
+obsP = data.frame(value=data_PI$yP, time = data_PI$tP, output = "pressure (mmHg)")
+obsI = data.frame(value=data_PI$yI, time = data_PI$tI, output = "inflow (ml/min)")
+obs = rbind(obsP,obsI)
+
+pl_pred=ggplot()+
+  geom_point(data = obs, aes(y=value, x=time, colour = "observed"), shape = 20)+
+  geom_line(data = pred_df, aes(y=mean, x=time, linetype = "mean"), size=0.9)+
+  geom_line(data = true_out, aes(y=val, x=time, linetype="true"), size=0.9)+
+  geom_ribbon(data = pred_df,aes(ymin=lower, ymax=upper, x=time, fill = "90% CI"), alpha = 0.3)+
+  facet_grid(output~model,scales = "free")+
+  geom_point(data = df_z, aes(x=z, y=y, shape="Z"), size=3)+
+  scale_fill_manual("",values=c("90% CI" = "grey12"))+
+  theme_bw()+xlab("time (sec)")+ylab("")+
+  scale_shape_manual("", values = c("Z" = 4))+
+  theme(#legend.position = "none",
+        legend.title = element_blank(),
+        legend.position="bottom",
+        strip.text.x = element_text(size = 13),
+        strip.text.y = element_text(size = 10))
+(pl_pred=pl_pred + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()))
+
+ggsave("figures/Appr_delta_pred.pdf", plot = pl_pred, width = 16, height = 10, units = "cm")
+```
+
+### Plug in noise  estimates 
+
+We observe that the VFE model can severely overestimate the noise and therefore result in underfitting. A remedy to this problem is to fix the noise parameter of the functions $P(t)$ and $Q(t),$ ($\sigma_P$ and $\sigma_I$). A possible solution for obtaining estimates for the noise parameters is to fit a standard GP model for each dataset $(y_P,t_P)$ and $y_Q, t_Q$ indepentently and obtain MLE estimates via maximizing the marginal log-likelihood.
+
+
+```{r}
+nsP = 25
+indP = seq(1,data_PI$nP,length.out = nsP)
+data_sample_P = list(N=nsP, x = data_PI$tP[indP], y = data_PI$yP[indP])
+data_sample_I = list(N=nsP, x = data_PI$tI[indP], y = data_PI$yI[indP])
+
+GP = stan_model('STAN/Approximations/GP_full/GP.stan')
+
+GP_MLE_P=optimizing(GP, data=data_sample_P, hessian=FALSE, verbose=TRUE,seed=0)
+GP_MLE_P
+
+sigma_P_MLE = GP_MLE_P$par["sigma"] 
+
+GP_MLE_I=optimizing(GP, data=data_sample_I, hessian=FALSE, verbose=TRUE,seed=0)
+GP_MLE_I
+
+sigma_I_MLE = GP_MLE_I$par["sigma"] 
+
+```
+```{r}
+data_pred_VFE_MLE = data_pred_VFE
+data_pred_VFE_MLE$sigmaP = sigma_P_MLE
+data_pred_VFE_MLE$sigmaI = sigma_I_MLE
+pred_VFE_MLE = stan(file = 'STAN/Approximations/VFE/MLE_sigma/WK2_delta_VFE_predictions.stan',
+                 data = data_pred_VFE_MLE ,
+                 chains = 1, iter = 1, seed=123,
+                 algorithm = "Fixed_param")
+```
+
+
+```{r}
+pp_VFE_MLE = rbind(post_mu_CIs.fn(post_pred=pred_VFE_MLE)$Psmr, post_mu_CIs.fn(post_pred=pred_VFE_MLE)$Ismr)
+pp_VFE_MLE$output = c(rep("pressure (mmHg)", nP_pred),rep("inflow (ml/min)", nP_pred))
+pp_VFE_MLE$model = "VFE fixed noise"
+pp_VFE = rbind(post_mu_CIs.fn(post_pred=pred_VFE)$Psmr, post_mu_CIs.fn(post_pred=pred_VFE)$Ismr)
+pp_VFE$output = c(rep("pressure (mmHg)", nP_pred),rep("inflow (ml/min)", nP_pred))
+pp_VFE$model = "VFE"
+pred_df = rbind(pp_VFE_MLE,pp_VFE)
+df_zP_VFE = data.frame(z=data_PI_Z_VFE$zP, y = rep(60, data_PI_Z_VFE$mP), model = "VFE", output = "pressure (mmHg)")
+df_zI_VFE = data.frame(z=data_PI_Z_VFE$zI, y = rep(-100, data_PI_Z_VFE$mI), model = "VFE", output = "inflow (ml/min)")
+df_zP_VFE_MLE = data.frame(z=data_pred_VFE_MLE$zP, y = rep(60, data_pred_VFE_MLE$mP), model = "VFE fixed noise", output = "pressure (mmHg)")
+df_zI_VFE_MLE = data.frame(z=data_pred_VFE_MLE$zI, y = rep(-100, data_pred_VFE_MLE$mI), model = "VFE fixed noise", output = "inflow (ml/min)")
+df_z = rbind(df_zP_VFE, df_zI_VFE,df_zP_VFE_MLE,df_zI_VFE_MLE)
+P_true = data.frame(val=Psim, time=time)
+P_true$output = "pressure (mmHg)"
+I_true = data.frame(val=flow, time=time)
+I_true$output = "inflow (ml/min)"
+true_out = rbind(P_true, I_true)
+
+obsP = data.frame(value=data_PI$yP, time = data_PI$tP, output = "pressure (mmHg)")
+obsI = data.frame(value=data_PI$yI, time = data_PI$tI, output = "inflow (ml/min)")
+obs = rbind(obsP,obsI)
+
+pl_pred=ggplot()+
+  geom_point(data = obs, aes(y=value, x=time, colour = "observed"), shape = 20)+
+  geom_line(data = pred_df, aes(y=mean, x=time, linetype = "mean"), size=0.9)+
+  geom_line(data = true_out, aes(y=val, x=time, linetype="true"), size=0.9)+
+  geom_ribbon(data = pred_df,aes(ymin=lower, ymax=upper, x=time, fill = "90% CI"), alpha = 0.3)+
+  facet_grid(output~model,scales = "free")+
+  geom_point(data = df_z, aes(x=z, y=y, shape="Z"), size=3)+
+  scale_fill_manual("",values=c("90% CI" = "grey12"))+
+  theme_bw()+xlab("time (sec)")+ylab("")+
+  scale_shape_manual("", values = c("Z" = 4))+
+  theme(#legend.position = "none",
+        legend.title = element_blank(),
+        legend.position="bottom",
+        strip.text.x = element_text(size = 13),
+        strip.text.y = element_text(size = 10))
+(pl_pred=pl_pred + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()))
+
+ggsave("figures/Appr_delta_pred_noise.pdf", plot = pl_pred, width = 16, height = 10, units = "cm")
+```
+
+
+
+```{r}
+sessionInfo()
+```
+
+
+

@@ -1,0 +1,323 @@
+---
+title: "S6) Baseline comparison"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  html_notebook: default
+---
+
+This notebook contains the code of the paper "Bayesian Calibration of Imperfect Computer Models using Physics-Informed Priors". The models are fitted in rstan and the code is available in the folder "STAN/Baseline_comparison". 
+
+#### Load packages
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(
+  message=FALSE,
+  warning = FALSE,
+  comment = '', 
+  fig.width = 6, 
+  fig.height = 4,
+  fig.align = 'center'
+)
+```
+
+```{r}
+# uncomment to install
+# install.packages("rstan")
+# install.packages("ggplot2")
+library(rstan)
+library(ggplot2)
+
+rstan_options(auto_write = TRUE)
+options(mc.cores = 3) # allocate 3 cores (for each model we run 3 chains in parallel)
+
+# Numerical simulator of the WK3 model
+source("functions/WK2and3_sim_fn.R")
+# Load flow data 
+d = readRDS("Data/Inflow_time.rds")
+```
+
+
+This notebook congtains the baseline comparison in Section 6. More specifically, three methods are compared. The Bayesian calibration method proposed by Kennedy and O'Hagan, the physics-informed prior (Raissi et al.) and the proposed approach. More details can be found in Section 6. 
+
+
+#### Reality and modelling choice 
+
+\begin{align}
+  \mathcal{R}: \quad & \frac{d P(t)}{d t} + \frac{P(t)}{R_2C} = \frac{Q(t)}{C} \left (1 + \frac{ R_1}{R_2} \right ) + R_1 \frac{d Q(t)}{dt} \quad \text{ (the misspesified model we use to fit the data) }\text{ [WK3] }\\
+  \eta: \quad  &  Q(t) = \frac{1}{R}P(t) + C \frac{dP(t)}{dt} \quad  \text{ (the model we use to simulate data) } \text{ [WK2] }
+\end{align}
+
+
+
+
+#### Data simulation
+
+```{r eval=TRUE}
+# choose some reasonable physical parameter values
+Rtrue = 1; Ctrue = 1.1; Ztrue = 0.05 
+flow = d$inflow*0.95
+time = d$time
+
+nP = 12 # number of pressure data
+nI = 17 # number of inflow data
+nc = 3  # number of cardiac cycles
+nflow = length(flow)
+# 1. simulate WK3 data (R=R_2, Z=R_1)
+Psim = WK3_simulate(flow = flow, time = time, R = Rtrue, C = Ctrue, Z=Ztrue) # simulate WK3 data for a given flow Q(t)
+P_true = Psim
+# 2. choose pressure and inflow indices
+indP = round(seq(1, nflow, length.out = nP)); indI = round(seq(1, nflow, length.out = nI))
+yP_real = Psim[indP]; yI_real = flow[indI] # noise free fimulated pressure and flow
+# 3. Add noise
+# set.seed(0)
+set.seed(123)
+Pnoise = rnorm(nP*nc, 0, 4) # sample pressure noise from N(0, 4^2)
+Inoise = rnorm(nI*nc, 0, 10) # sample flow noise from N(0,10^2)
+yP_real = rep(yP_real,nc) # create 2 replicates (2 cardiac cycles/heart beats) 
+yI_real = rep(yI_real,nc) # create 2 replicates (2 cardiac cycles/heart beats)
+# 4. store individual data in the population matrices
+yP = yP_real + Pnoise # add noise
+yI = yI_real + Inoise # add noise
+tP = time[indP] # corresponding time (synchronized for the two cycles)
+tI = time[indI] # corresponding time (synchronized for the two cycles)
+```
+
+
+
+
+### Model 1 (PI optimization)
+```{r}
+#-------------------------------------------------
+### Model 1 (no-without delta in paper, Figure 6)
+# WK2 PI prior / no delta (magenta model)
+nP_pred = nI_pred = 30
+ind_pred = round(seq(1,101,length.out = nP_pred))
+tP_pred = tI_pred=time[ind_pred]
+data_PI = list(nP=nc*nP, nI=nc*nI, tP=rep(tP,3), tI=rep(tI,3), yP=yP, yI=yI,
+                 nP_pred=nP_pred, nI_pred=nI_pred, tP_pred=tP_pred, tI_pred=tI_pred)
+WK2_PI_opt = stan_model("STAN/Baseline_comparison/PI_opt/WK2_PI.stan")
+lfit = list()
+set.seed(123)
+lval = topt = rep(NA,10)
+for(i in 1:10){
+  tic = Sys.time()
+  lfit[[i]] = optimizing(WK2_PI_opt, data=data_PI, hessian=FALSE)
+  toc = Sys.time()
+  topt[i] = toc-tic
+  lval[i] = lfit[[i]]$value
+}
+sum(topt)
+```
+
+
+##### PI Predictions
+
+```{r}
+opt_par = lfit[[which.max(lval)]]$par
+pred_data = list(nP=nc*nP, nI=nc*nI, tP=rep(tP,3), tI=rep(tI,3), yP=yP, yI=yI,
+                 rho=opt_par["rho"],alpha=opt_par["alpha"], sigmaP=opt_par["sigmaP"],
+                 sigmaI=opt_par["sigmaI"],R=opt_par["R"],C=opt_par["C"],
+                 nP_pred=nP_pred, nI_pred=nI_pred, tP_pred=tP_pred, tI_pred=tI_pred)
+
+pred_fit = stan(file="STAN/Baseline_comparison/PI_opt/WK2_PI_pred.stan", data=pred_data, iter=1000, warmup=0,
+                     chains=1, seed=123, refresh=1000, algorithm="Fixed_param")
+```
+
+```{r}
+smr=summary(pred_fit)$summary
+
+pred=data.frame(smr[grep("y_P", rownames(smr)), c("mean", "2.5%", "97.5%")])
+rmse=function(actual, pred) sqrt(mean((actual - pred)^2))
+(rmse_opt=rmse(actual=P_true[ind_pred],pred=pred[,"mean"]))
+```
+
+### Model 2 (BCPI)
+
+```{r}
+# Function for extracting the posterior summary
+post_smr.fn = function(post,quant=c(0.05, 0.95), t_pred){
+  df = data.frame(
+    mean = colMeans(post),
+    lower = apply(post, 2, quantile, probs = quant[1]),
+    upper = apply(post, 2, quantile, probs = quant[2]),
+    time = t_pred
+  )
+}
+```
+
+
+
+```{r}
+fit_BCPI = stan(file="STAN/Baseline_comparison/BCPI/WK2_delta_SE.stan",
+                data=data_PI,
+                chains=3,
+                iter=1000,
+                seed=0
+)
+fit_BCPI 
+```
+
+##### BCPI predictions
+
+```{r}
+post_BCPI =  rstan::extract(fit_BCPI)
+N_samples = length(post_BCPI$rho)
+data_pred = list(nP=nc*nP, nI=nc*nI, tP=rep(tP,3), tI=rep(tI,3), yP=yP, yI=yI
+                   , tP_pred = tP_pred, tI_pred=tI_pred, nP_pred=nP_pred, nI_pred=nI_pred
+                   , alpha=post_BCPI$alpha, rho=post_BCPI$rho, alpha_d=post_BCPI$alpha_d
+                   , rho_d=post_BCPI$rho_d, sigmaP=post_BCPI$sigmaP, sigmaI=post_BCPI$sigmaI
+                   , R=post_BCPI$R, C=post_BCPI$C, N_samples=N_samples
+  )
+  
+pred_BCPI = stan(file = "STAN/Baseline_comparison/BCPI/WK2_delta_pred.stan",
+              data = data_pred,
+              chains = 1, iter = 1, seed=123,
+              algorithm = "Fixed_param")
+ex_pred=rstan::extract(pred_BCPI)
+```
+```{r}
+Psam = ex_pred$y_P[1,,]
+Isam = ex_pred$y_I[1,,]
+P_post = post_smr.fn(Psam,quant=c(0.05, 0.95), tP_pred)
+(rmse_BCPI=rmse(actual=P_true[ind_pred],pred=P_post[,"mean"]))
+```
+
+
+```{r}
+library(lhs)
+nd=12
+set.seed(123)
+RC_des=data.frame(maximinLHS(nd,2)*2.5 +0.5)
+colnames(RC_des)=c("R", "C")
+# plot(RC_des)
+```
+
+```{r}
+sim_list=list()
+for (i in 1:nd) {
+  # remember that flow in practice is noisy
+  R = RC_des$R[i]
+  C = RC_des$C[i]
+  Psim = WK2_simulate(flow = flow, time = time, R = R, C = C) 
+  indP = round(seq(1, nflow, length.out = nP)); indI = round(seq(1, nflow, length.out = nP))
+  t = time[indP] 
+  sim_list[[i]] = data.frame(P =Psim[indP], t=t, Q=flow[indP]/diff(range(flow)), R=rep(R,nP), C=rep(C,nP))
+}
+model_data = do.call(rbind, sim_list)
+```
+
+#### Prepare data for the KOH model fit
+
+```{r}
+eta = model_data$P
+x_M = model_data[, c("t", "Q")]
+t_M = model_data[, c("R", "C")]
+y = yP
+# remember again that flow in practice is noisy
+x_F = data.frame(t=rep(tP,3), Q=rep(flow[indP],3)/diff(range(flow)))
+m = nrow(x_M)
+n = nrow(x_F)
+p=2
+q=2
+data_KOH = list(m=m, n=n, p=p, q=q, eta=eta, y=y, x_M=x_M, t_M=t_M, x_F=x_F, delta=1e-8)
+```
+
+```{r}
+fit_KOH = stan(file="STAN/Baseline_comparison/KOH/KOH.stan",
+               data=data_KOH,
+               chains=3,
+               iter=1000,
+               seed=123
+)
+```
+```{r}
+fit_KOH
+```
+
+
+```{r}
+stan_trace(fit_KOH, pars = "t_F")
+```
+```{r}
+KOH_post=rstan::extract(fit_KOH)
+tf=data.frame(t=time, Q=flow/diff(range(flow)))
+x_Fpred=tf[ind_pred,]
+data_pred_KOH = list(
+  m=m, n=length(y), p=p, q=q, eta=eta, y=y, x_M=x_M, t_M=t_M, x_F=x_F, delta=1e-8,
+  n_pred=nP_pred, x_Fpred=x_Fpred, N_samples=nrow(KOH_post$rho_M),
+  alpha_M=KOH_post$alpha_M, alpha_B=KOH_post$alpha_B,
+  rho_M=KOH_post$rho_M, rho_B=KOH_post$rho_B,
+  sigma=KOH_post$sigma, t_F=KOH_post$t_F
+  )
+```
+
+
+#### KOH predictions
+
+```{r}
+pred_KOH = stan(file = "STAN/Baseline_comparison/KOH/KOH_pred.stan",
+                 data = data_pred_KOH,
+                 chains = 1, iter = 1, seed=123,
+                 algorithm = "Fixed_param")
+ex_pred_KOH=rstan::extract(pred_KOH)
+Psam = ex_pred_KOH$y_P[1,,]
+P_post_KOH = post_smr.fn(Psam,quant=c(0.05, 0.95), tP_pred)
+(rmse_KOH=rmse(actual=P_true[ind_pred],pred=P_post_KOH[,"mean"]))
+```
+
+```{r}
+# Psam = ex_pred_KOH$y_P[1,,]
+# P_post_KOH = post_smr.fn(Psam,quant=c(0.05, 0.95), tP_pred)
+# (rmse_KOH=rmse(actual=P_true[ind_pred],pred=P_post_KOH[,"mean"]))
+```
+
+
+```{r}
+pr_BCPI=rstan::extract(pred_BCPI)$y_P
+BCPI_rmse_vec=apply(pr_BCPI[1,,],1,rmse, actual=P_true[ind_pred])
+mean(BCPI_rmse_vec); sd(BCPI_rmse_vec)
+```
+
+##### Table in Section 6
+
+```{r}
+pr = c("R", "C", "sigmaP", "sigmaI")
+opt_par[pr]
+
+opt_mu_CI = data.frame(mu = opt_par[pr], lower=rep(NA,4), upper=rep(NA,4))
+opt_mu_CI$mu=round(opt_mu_CI$mu,2)
+rownames(opt_mu_CI) = pr
+smr_BCPI = summary(fit_BCPI, pars=pr, probs = c(0.05, 0.95))$summary
+smr_BCPI[,c("mean", "5%", "95%")]
+
+BCPI_mu_CI = data.frame(mu = c(smr_BCPI[,"mean"]),
+                        lower = c(smr_BCPI[,"5%"]),
+                        upper =  c(smr_BCPI[,"95%"]))
+
+smr_KOH = summary(fit_KOH, pars=c("t_F", "sigma"), probs = c(0.05, 0.95))$summary
+rownames(smr_KOH) = pr[1:3]
+smr_KOH[,c("mean", "5%", "95%")]
+KOH_mu_CI = data.frame(mu = c(smr_KOH[,"mean"],NA),
+                        lower = c(smr_KOH[,"5%"],NA),
+                        upper =  c(smr_KOH[,"95%"],NA))
+rownames(KOH_mu_CI) = pr
+res_opt = with(opt_mu_CI, paste0(mu, "(", lower, ",", upper, ")"))
+res_BCPI = with(round(BCPI_mu_CI,2), paste0(mu, "(", lower, ",", upper, ")"))
+res_KOH = with(round(KOH_mu_CI,2), paste0(mu, "(", lower, ",", upper, ")"))
+res_all = rbind(res_opt, res_KOH, res_BCPI)
+rownames(res_all) = c("PI opt", "KOH", "BCPI")
+colnames(res_all) = pr
+res_all=data.frame(res_all)
+res_all$RMSE = as.character(round(c(rmse_opt, rmse_KOH, rmse_BCPI),2))
+rt_BCPI = get_elapsed_time(fit_BCPI)
+rt_KOH = get_elapsed_time(fit_KOH)
+res_all$run_time = round(c(sum(topt), max(apply(rt_KOH,1,sum)), max(apply(rt_BCPI,1,sum))))
+res_all
+```
+
+```{r}
+sessionInfo()
+```
+
