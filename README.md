@@ -33,6 +33,9 @@ More specifically:
 - The **WK_MD__S3.3.Rmd** contains the code of the results in Section 3.3.
 - The **HF__S4.Rmd** contains the code of the results in Section 4.
 - The **Real_data_WK__S5.Rmd** contains the code of the results in Section 5.
+- The **Baseline_comparison.Rmd** contains the code of the results in Section 6.
+- The **Big_data_appr_noDelta.Rmd** contains the code of the results in Section 7.2.
+- The **Big_data_appr_Discrepancy.Rmd** contains the code of the results in Section 7.3.
 
 All notebooks have also been exported as .pdf and .html files. 
 
@@ -40,12 +43,14 @@ Running time ranges from several minutes up to ~20 minutes.
 
 ---
 ## STAN folder
-The **STAN** folder contains the stan code for the models in Sections 3, 4 and 5.
+The **STAN** folder contains the stan code for the models in Sections 3, 4, 5, 6 and 7.
 
 More specifically:
 
 - The **Windkessel** folder contains the stan code for the models in Sections 3 and 5.
 - The **Heat_equation** folder contains the stan code for the models in Section 4.
+- The **Baseline_comparison** folder contains the stan code for the models in Section 6.
+- The **Approximations** folder contains the stan code for the models in Section 7.
 
 ## Data folder
 The **Data** folder contains blood flow data used to simulate blood pressures in Section 3 and the real data used in Section 5. 
