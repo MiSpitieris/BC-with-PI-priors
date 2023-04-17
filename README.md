@@ -1,6 +1,6 @@
 # Bayesian Calibration of Imperfect Computer Models using Physics-Informed Priors
 
-This repository is the official implementation of the paper "[Bayesian Calibration of Imperfect Computer Models using Physics-Informed Priors](https://arxiv.org/abs/2201.06463)". 
+This repository is the official implementation of the paper "[Bayesian Calibration of Imperfect Computer Models using Physics-Informed Priors](https://www.jmlr.org/papers/volume24/22-0676/22-0676.pdf)". 
 
 <p align="center">
  <img src="figures/anim_noBias.gif" alt="drawing" width="360"/> 
